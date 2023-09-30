@@ -79,7 +79,7 @@ fn gaussian_demo() !void {
     defer file.close();
 
     const writer = file.writer();
-    try writer.print("x, sin, dsin/dx\n", .{});
+    try writer.print("x, f, df/dx (derive), df/dx (backward),\n", .{});
 
     var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer aa.deinit();
@@ -95,8 +95,10 @@ fn gaussian_demo() !void {
         tape.clear_data();
         x.set(xval);
         const gaussianval = gaussian.eval();
-        const dgaussianval = gaussian.derive(x);
-        try writer.print("{?}, {?}, {?}\n", .{ xval, gaussianval, dgaussianval });
+        const gaus_derive = gaussian.derive(x);
+        gaussian.backward();
+        const gaus_back = x.get_grad() orelse return;
+        try writer.print("{?}, {?}, {?}, {?}\n", .{ xval, gaussianval, gaus_derive, gaus_back });
     }
 }
 
@@ -116,6 +118,9 @@ pub const TapeTerm = struct {
     fn get_data(self: *const TapeTerm) ?f64 {
         return self.*.tape.*.nodes[self.*.idx].data;
     }
+    fn get_grad(self: *const TapeTerm) ?f64 {
+        return self.*.tape.*.nodes[self.*.idx].grad;
+    }
     fn set(self: *const TapeTerm, val: f64) void {
         var node = &self.*.tape.*.nodes[self.*.idx];
         switch (node.*.value) {
@@ -129,6 +134,10 @@ pub const TapeTerm = struct {
     fn derive(self: *const TapeTerm, wrt: TapeTerm) ?f64 {
         self.*.tape.clear_grad();
         return self.*.tape.derive(self.*.idx, wrt.idx);
+    }
+    fn backward(self: *const TapeTerm) void {
+        self.*.tape.clear_grad();
+        return self.*.tape.backward(self.*.idx);
     }
     fn add(self: *const TapeTerm, rhs: TapeTerm, arena: *std.mem.Allocator) !TapeTerm {
         return self._bin_op(rhs, arena, TapeValue{ .add = .{ self.*.idx, rhs.idx } }, " - ", true);
@@ -259,6 +268,47 @@ pub const Tape = struct {
         };
         node.*.grad = ret;
         return ret;
+    }
+    fn backward(self: *Tape, term: TapeIndex) void {
+        var nodes = &self.*.nodes;
+        nodes.*[term].grad = 1.0;
+        for (0..term + 1) |i| {
+            const ii = term - i;
+            var node = &nodes.*[ii];
+            const grad = node.*.grad orelse 0;
+            switch (node.value) {
+                .value => {},
+                .add => |args| {
+                    nodes.*[args[0]].grad = if (nodes.*[args[0]].grad) |v| v + grad else grad;
+                    nodes.*[args[1]].grad = if (nodes.*[args[1]].grad) |v| v + grad else grad;
+                },
+                .sub => |args| {
+                    nodes.*[args[0]].grad = if (nodes.*[args[0]].grad) |v| v + grad else grad;
+                    nodes.*[args[1]].grad = if (nodes.*[args[1]].grad) |v| v - grad else -grad;
+                },
+                .mul => |args| {
+                    const lhs_grad = self.eval(args[1]) * grad;
+                    nodes.*[args[0]].grad = if (nodes.*[args[0]].grad) |v| v + lhs_grad else lhs_grad;
+                    const rhs_grad = self.eval(args[0]) * grad;
+                    nodes.*[args[1]].grad = if (nodes.*[args[1]].grad) |v| v + rhs_grad else rhs_grad;
+                },
+                .div => |args| {
+                    const lhs = self.eval(args[0]);
+                    const rhs = self.eval(args[1]);
+                    const lhs_grad = -lhs * grad / rhs / rhs;
+                    nodes.*[args[0]].grad = if (nodes.*[args[0]].grad) |v| v + lhs_grad else lhs_grad;
+                    const rhs_grad = grad / rhs;
+                    nodes.*[args[1]].grad = if (nodes.*[args[1]].grad) |v| v + rhs_grad else rhs_grad;
+                },
+                .neg => |arg| {
+                    nodes.*[arg].grad = if (nodes.*[arg].grad) |v| v - grad else -grad;
+                },
+                .unary_fn => |args| {
+                    const term_grad = grad * args.grad(self.eval(args.idx));
+                    nodes.*[args.idx].grad = if (nodes.*[args.idx].grad) |v| v + term_grad else term_grad;
+                },
+            }
+        }
     }
     fn clear_data(self: *Tape) void {
         for (self.*.nodes[0..self.*.count]) |*node| {
