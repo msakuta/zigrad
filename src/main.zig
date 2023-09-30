@@ -16,12 +16,14 @@ pub fn main() !void {
     const abc = try ab.sub(c, &allocator);
     const d = tape.variable("d", 10);
     const abcd = try abc.mul(d, &allocator);
-    std.debug.print("{?s} = {?}\n", .{a.get_name(), a.eval()});
-    std.debug.print("{?s} = {?}\n", .{b.get_name(), b.eval()});
-    std.debug.print("{?s} = {?}\n", .{c.get_name(), c.eval()});
-    std.debug.print("{?s} = {?}\n", .{abcd.get_name(), abcd.eval()});
-    for ([_]TapeTerm{ a, b, c, d }) |x| {
-        std.debug.print("d({?s})/d{?s} = {?}\n", .{abcd.get_name(), x.get_name(), abcd.derive(x)});
+    const e = tape.variable("e", 3);
+    const abcde = try abcd.div(e, &allocator);
+    std.debug.print("{?s} = {?}\n", .{ a.get_name(), a.eval() });
+    std.debug.print("{?s} = {?}\n", .{ b.get_name(), b.eval() });
+    std.debug.print("{?s} = {?}\n", .{ c.get_name(), c.eval() });
+    std.debug.print("{?s} = {?}\n", .{ abcde.get_name(), abcde.eval() });
+    for ([_]TapeTerm{ a, b, c, d, e }) |x| {
+        std.debug.print("d({?s})/d{?s} = {?}\n", .{ abcde.get_name(), x.get_name(), abcde.derive(x) });
     }
 }
 
@@ -49,46 +51,43 @@ pub const TapeTerm = struct {
         return self.*.tape.derive(self.*.idx, wrt.idx);
     }
     fn add(self: *const TapeTerm, rhs: TapeTerm, arena: *std.mem.Allocator) !TapeTerm {
-        var tape = self.*.tape;
-        const term = tape.*.count;
-        tape.*.nodes[term] = TapeNode {
-            .name = try concatWithOpParen(arena, tape.*.nodes[self.*.idx].name, " + ", tape.*.nodes[rhs.idx].name),
-            .value = TapeValue { .add = .{self.*.idx, rhs.idx}},
-            .data = null,
-            .grad = null,
-        };
-        tape.*.count += 1;
-        return TapeTerm {
-            .tape = tape,
-            .idx = @intCast(term),
-        };
+        return self._bin_op(rhs, arena, TapeValue{ .add = .{ self.*.idx, rhs.idx } }, " - ", true);
     }
     fn sub(self: *const TapeTerm, rhs: TapeTerm, arena: *std.mem.Allocator) !TapeTerm {
+        return self._bin_op(rhs, arena, TapeValue{ .sub = .{ self.*.idx, rhs.idx } }, " - ", true);
+    }
+    fn mul(self: *const TapeTerm, rhs: TapeTerm, arena: *std.mem.Allocator) !TapeTerm {
+        return self._bin_op(rhs, arena, TapeValue{ .mul = .{ self.*.idx, rhs.idx } }, " * ", false);
+    }
+    fn div(self: *const TapeTerm, rhs: TapeTerm, arena: *std.mem.Allocator) !TapeTerm {
+        return self._bin_op(rhs, arena, TapeValue{ .div = .{ self.*.idx, rhs.idx } }, " / ", false);
+    }
+    fn neg(self: *const TapeTerm, arena: *std.mem.Allocator) !TapeTerm {
         var tape = self.*.tape;
         const term = tape.*.count;
-        tape.*.nodes[term] = TapeNode {
-            .name = try concatWithOpParen(arena, tape.*.nodes[self.*.idx].name, " - ", tape.*.nodes[rhs.idx].name),
-            .value = TapeValue { .sub = .{self.*.idx, rhs.idx}},
+        tape.*.nodes[term] = TapeNode{
+            .name = try std.mem.concat(arena, [*]const [:0]const u8{ "-", tape.*.nodes[self.*.idx].name }),
+            .value = TapeValue{ .neg = self.*.idx },
             .data = null,
             .grad = null,
         };
         tape.*.count += 1;
-        return TapeTerm {
+        return TapeTerm{
             .tape = tape,
             .idx = @intCast(term),
         };
     }
-    fn mul(self: *const TapeTerm, rhs: TapeTerm, arena: *std.mem.Allocator) !TapeTerm {
+    fn _bin_op(self: *const TapeTerm, rhs: TapeTerm, arena: *std.mem.Allocator, variant: TapeValue, op_name: [:0]const u8, paren: bool) !TapeTerm {
         var tape = self.*.tape;
         const term = tape.*.count;
-        tape.*.nodes[term] = TapeNode {
-            .name = try concatWithOp(arena, tape.*.nodes[self.*.idx].name, " * ", tape.*.nodes[rhs.idx].name),
-            .value = TapeValue { .mul = .{self.*.idx, rhs.idx}},
+        tape.*.nodes[term] = TapeNode{
+            .name = if (paren) try concatWithOpParen(arena, tape.*.nodes[self.*.idx].name, op_name, tape.*.nodes[rhs.idx].name) else try concatWithOp(arena, tape.*.nodes[self.*.idx].name, op_name, tape.*.nodes[rhs.idx].name),
+            .value = variant,
             .data = null,
             .grad = null,
         };
         tape.*.count += 1;
-        return TapeTerm {
+        return TapeTerm{
             .tape = tape,
             .idx = @intCast(term),
         };
@@ -99,21 +98,21 @@ pub const Tape = struct {
     nodes: [128]TapeNode,
     count: usize,
     fn new() Tape {
-        return Tape {
+        return Tape{
             .nodes = undefined,
             .count = 0,
         };
     }
     fn variable(self: *Tape, name: [:0]const u8, v: f64) TapeTerm {
         const term = self.*.count;
-        self.*.nodes[term] = TapeNode {
+        self.*.nodes[term] = TapeNode{
             .name = name,
-            .value = TapeValue { .value = v },
+            .value = TapeValue{ .value = v },
             .data = null,
             .grad = null,
         };
         self.*.count += 1;
-        return TapeTerm {
+        return TapeTerm{
             .tape = self,
             .idx = @as(u32, @intCast(term)),
         };
@@ -129,7 +128,8 @@ pub const Tape = struct {
             .add => |args| self.eval(args[0]) + self.eval(args[1]),
             .sub => |args| self.eval(args[0]) - self.eval(args[1]),
             .mul => |args| self.eval(args[0]) * self.eval(args[1]),
-            else => @panic("Nope"),
+            .div => |args| self.eval(args[0]) / self.eval(args[1]),
+            .neg => |arg| -self.eval(arg),
         };
         node.*.data = ret;
         return ret;
@@ -151,7 +151,14 @@ pub const Tape = struct {
                 const drhs = self.derive(args[1], wrt);
                 break :blk lhs * drhs + dlhs * rhs;
             },
-            else => @panic("TODO"),
+            .div => |args| blk: {
+                const lhs = self.eval(args[0]);
+                const dlhs = self.derive(args[0], wrt);
+                const rhs = self.eval(args[1]);
+                const drhs = self.derive(args[1], wrt);
+                break :blk -lhs * drhs / rhs / rhs + dlhs / rhs;
+            },
+            .neg => |arg| -self.derive(arg, wrt),
         };
         node.*.grad = ret;
         return ret;
@@ -175,13 +182,13 @@ pub const TapeValue = union(enum) {
 };
 
 test "tape_value" {
-    const t = TapeValue { .value = 123 };
+    const t = TapeValue{ .value = 123 };
     switch (t) {
         .value => |*v| try expect(v.* == 123),
         else => expect(false),
     }
 
-    const t2 = TapeValue { .add = .{ 0, 1 } };
+    const t2 = TapeValue{ .add = .{ 0, 1 } };
     switch (t2) {
         .add => |*v| try expect(v.*[0] == 0 and v.*[1] == 1),
         else => expect(false),
