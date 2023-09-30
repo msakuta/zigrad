@@ -2,7 +2,7 @@ const std = @import("std");
 const expect = std.testing.expect;
 
 pub fn main() !void {
-    try sine_demo();
+    try gaussian_demo();
 }
 
 fn expr_demo() !void {
@@ -56,7 +56,7 @@ fn sine_demo() !void {
     var tape = Tape.new();
     const x = tape.variable("x", 0.0);
     const x2 = try x.mul(x, &allocator);
-    const sin_x = try x2.apply(&allocator, "x", &sin, &cos);
+    const sin_x = try x2.apply(&allocator, "sin", &sin, &cos);
     for (0..100) |i| {
         const xval = (@as(f64, @floatFromInt(i)) - 50.0) / 10.0;
         tape.clear_data();
@@ -64,6 +64,39 @@ fn sine_demo() !void {
         const sin_xval = sin_x.eval();
         const dsin_xval = sin_x.derive(x);
         try writer.print("{?}, {?}, {?}\n", .{ xval, sin_xval, dsin_xval });
+    }
+}
+
+fn exp(x: f64) f64 {
+    return std.math.exp(x);
+}
+
+fn gaussian_demo() !void {
+    const file = try std.fs.cwd().createFile(
+        "zigdata.csv",
+        .{ .read = true },
+    );
+    defer file.close();
+
+    const writer = file.writer();
+    try writer.print("x, sin, dsin/dx\n", .{});
+
+    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer aa.deinit();
+    var allocator = aa.allocator();
+
+    var tape = Tape.new();
+    const x = tape.variable("x", 0.0);
+    const x2 = try x.mul(x, &allocator);
+    const nx2 = try x2.neg(&allocator);
+    const gaussian = try nx2.apply(&allocator, "exp", &exp, &exp);
+    for (0..100) |i| {
+        const xval = (@as(f64, @floatFromInt(i)) - 50.0) / 10.0;
+        tape.clear_data();
+        x.set(xval);
+        const gaussianval = gaussian.eval();
+        const dgaussianval = gaussian.derive(x);
+        try writer.print("{?}, {?}, {?}\n", .{ xval, gaussianval, dgaussianval });
     }
 }
 
@@ -113,7 +146,7 @@ pub const TapeTerm = struct {
         var tape = self.*.tape;
         const term = tape.*.count;
         tape.*.nodes[term] = TapeNode{
-            .name = try std.mem.concat(arena, [*]const [:0]const u8{ "-", tape.*.nodes[self.*.idx].name }),
+            .name = try std.mem.concatWithSentinel(arena.*, u8, &[_][:0]const u8{ "-", tape.*.nodes[self.*.idx].name }, 0),
             .value = TapeValue{ .neg = self.*.idx },
             .data = null,
             .grad = null,
