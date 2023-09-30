@@ -55,7 +55,8 @@ fn sine_demo() !void {
 
     var tape = Tape.new();
     const x = tape.variable("x", 0.0);
-    const sin_x = try x.apply(&allocator, "x", &sin, &cos);
+    const x2 = try x.mul(x, &allocator);
+    const sin_x = try x2.apply(&allocator, "x", &sin, &cos);
     for (0..100) |i| {
         const xval = (@as(f64, @floatFromInt(i)) - 50.0) / 10.0;
         tape.clear_data();
