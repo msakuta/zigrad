@@ -2,6 +2,10 @@ const std = @import("std");
 const expect = std.testing.expect;
 
 pub fn main() !void {
+    try sine_demo();
+}
+
+fn expr_demo() !void {
     var da = std.heap.page_allocator;
 
     var aa = std.heap.ArenaAllocator.init(da);
@@ -27,6 +31,41 @@ pub fn main() !void {
     }
 }
 
+fn sin(x: f64) f64 {
+    return std.math.sin(x);
+}
+
+fn cos(x: f64) f64 {
+    return std.math.cos(x);
+}
+
+fn sine_demo() !void {
+    const file = try std.fs.cwd().createFile(
+        "zigdata.csv",
+        .{ .read = true },
+    );
+    defer file.close();
+
+    const writer = file.writer();
+    try writer.print("x, sin, dsin/dx\n", .{});
+
+    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer aa.deinit();
+    var allocator = aa.allocator();
+
+    var tape = Tape.new();
+    const x = tape.variable("x", 0.0);
+    const sin_x = try x.apply(&allocator, "x", &sin, &cos);
+    for (0..100) |i| {
+        const xval = (@as(f64, @floatFromInt(i)) - 50.0) / 10.0;
+        tape.clear_data();
+        x.set(xval);
+        const sin_xval = sin_x.eval();
+        const dsin_xval = sin_x.derive(x);
+        try writer.print("{?}, {?}, {?}\n", .{ xval, sin_xval, dsin_xval });
+    }
+}
+
 pub const TapeNode = struct {
     name: [:0]const u8,
     value: TapeValue,
@@ -43,7 +82,14 @@ pub const TapeTerm = struct {
     fn get_data(self: *const TapeTerm) ?f64 {
         return self.*.tape.*.nodes[self.*.idx].data;
     }
-    fn eval(self: *const TapeTerm) ?f64 {
+    fn set(self: *const TapeTerm, val: f64) void {
+        var node = &self.*.tape.*.nodes[self.*.idx];
+        switch (node.*.value) {
+            .value => |*data| data.* = val,
+            else => return,
+        }
+    }
+    fn eval(self: *const TapeTerm) f64 {
         return self.*.tape.eval(self.*.idx);
     }
     fn derive(self: *const TapeTerm, wrt: TapeTerm) ?f64 {
@@ -68,6 +114,21 @@ pub const TapeTerm = struct {
         tape.*.nodes[term] = TapeNode{
             .name = try std.mem.concat(arena, [*]const [:0]const u8{ "-", tape.*.nodes[self.*.idx].name }),
             .value = TapeValue{ .neg = self.*.idx },
+            .data = null,
+            .grad = null,
+        };
+        tape.*.count += 1;
+        return TapeTerm{
+            .tape = tape,
+            .idx = @intCast(term),
+        };
+    }
+    fn apply(self: *const TapeTerm, arena: *std.mem.Allocator, name: [:0]const u8, f: *const fn (f64) f64, grad: *const fn (f64) f64) !TapeTerm {
+        var tape = self.*.tape;
+        const term = tape.*.count;
+        tape.*.nodes[term] = TapeNode{
+            .name = try std.mem.concatWithSentinel(arena.*, u8, &[_][:0]const u8{ name, "(", tape.*.nodes[self.*.idx].name, ")" }, 0),
+            .value = TapeValue{ .unary_fn = .{ .idx = self.*.idx, .f = f, .grad = grad } },
             .data = null,
             .grad = null,
         };
@@ -130,6 +191,7 @@ pub const Tape = struct {
             .mul => |args| self.eval(args[0]) * self.eval(args[1]),
             .div => |args| self.eval(args[0]) / self.eval(args[1]),
             .neg => |arg| -self.eval(arg),
+            .unary_fn => |args| args.f(self.eval(args.idx)),
         };
         node.*.data = ret;
         return ret;
@@ -159,9 +221,15 @@ pub const Tape = struct {
                 break :blk -lhs * drhs / rhs / rhs + dlhs / rhs;
             },
             .neg => |arg| -self.derive(arg, wrt),
+            .unary_fn => |args| self.derive(args.idx, wrt) * args.grad(self.eval(args.idx)),
         };
         node.*.grad = ret;
         return ret;
+    }
+    fn clear_data(self: *Tape) void {
+        for (self.*.nodes[0..self.*.count]) |*node| {
+            node.*.data = null;
+        }
     }
     fn clear_grad(self: *Tape) void {
         for (self.*.nodes[0..self.*.count]) |*node| {
@@ -179,6 +247,7 @@ pub const TapeValue = union(enum) {
     mul: [2]TapeIndex,
     div: [2]TapeIndex,
     neg: TapeIndex,
+    unary_fn: struct { idx: TapeIndex, f: *const fn (f64) f64, grad: *const fn (f64) f64 },
 };
 
 test "tape_value" {
