@@ -6,7 +6,7 @@ const TapeIndex = ad.TapeIndex;
 const expect = std.testing.expect;
 
 pub fn main() !void {
-    std.debug.print("size: {?}\n", .{@sizeOf(ad.TapeNode)});
+    // try expr_demo();
     // try sine_demo();
     // try gen_graph_test();
     try gaussian_higher_order_demo();
@@ -19,7 +19,7 @@ fn expr_demo() !void {
     defer aa.deinit();
     var allocator = aa.allocator();
 
-    var tape = Tape.new();
+    var tape = try Tape.new(&allocator, 32);
     const a = tape.variable("a", 42);
     const b = tape.variable("b", 24);
     const ab = try a.add(b, &allocator);
@@ -60,7 +60,7 @@ fn sine_demo() !void {
     defer aa.deinit();
     var allocator = aa.allocator();
 
-    var tape = Tape.new();
+    var tape = try Tape.new(&allocator, 32);
     const x = tape.variable("x", 0.0);
     const x2 = try x.mul(x, &allocator);
     const sin_x = try x2.apply(&allocator, "sin", &sin, &cos, null);
@@ -123,7 +123,7 @@ fn gen_graph_test() !void {
     defer aa.deinit();
     var allocator = aa.allocator();
 
-    var tape = Tape.new();
+    var tape = try Tape.new(&allocator, 32);
     const x = tape.variable("x", 0.0);
     const x2 = try x.mul(x, &allocator);
     const nx2 = try x2.neg(&allocator);
@@ -167,7 +167,7 @@ fn gaussian_higher_order_demo() !void {
     defer aa.deinit();
     var allocator = aa.allocator();
 
-    var tape = Tape.new();
+    var tape = try Tape.new(&allocator, 128);
     const x = tape.variable("x", 0.0);
     const x2 = try x.mul(x, &allocator);
     const nx2 = try x2.neg(&allocator);

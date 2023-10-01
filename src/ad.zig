@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const expect = std.testing.expect;
+const assert = std.debug.assert;
 
 // const debug_print = std.debug.print;
 fn debug_print(fmt: [:0]const u8, _: anytype) void {
@@ -63,6 +64,7 @@ pub const TapeTerm = struct {
     pub fn neg(self: *const TapeTerm, arena: *std.mem.Allocator) !TapeTerm {
         var tape = self.*.tape;
         const term = tape.*.count;
+        assert(term < tape.*.nodes.len);
         tape.*.nodes[term] = TapeNode{
             .name = try std.mem.concatWithSentinel(arena.*, u8, &[_][:0]const u8{ "-", tape.*.nodes[self.*.idx].name }, 0),
             .value = TapeValue{ .neg = self.*.idx },
@@ -78,6 +80,7 @@ pub const TapeTerm = struct {
     pub fn apply(self: *const TapeTerm, arena: *std.mem.Allocator, name: [:0]const u8, f: *const fn (f64) f64, grad: *const fn (f64) f64, gen_graph_: ?GenGraph) !TapeTerm {
         var tape = self.*.tape;
         const term = tape.*.count;
+        assert(term < tape.*.nodes.len);
         tape.*.nodes[term] = TapeNode{
             .name = try std.mem.concatWithSentinel(arena.*, u8, &[_][:0]const u8{ name, "(", tape.*.nodes[self.*.idx].name, ")" }, 0),
             .value = TapeValue{ .unary_fn = .{ .idx = self.*.idx, .f = f, .grad = grad, .gen_graph = gen_graph_ } },
@@ -93,6 +96,7 @@ pub const TapeTerm = struct {
     fn _bin_op(self: *const TapeTerm, rhs: TapeTerm, arena: *std.mem.Allocator, variant: TapeValue, op_name: [:0]const u8, paren: bool) !TapeTerm {
         var tape = self.*.tape;
         const term = tape.*.count;
+        assert(term < tape.*.nodes.len);
         tape.*.nodes[term] = TapeNode{
             .name = if (paren) try concatWithOpParen(arena, tape.*.nodes[self.*.idx].name, op_name, tape.*.nodes[rhs.idx].name) else try concatWithOp(arena, tape.*.nodes[self.*.idx].name, op_name, tape.*.nodes[rhs.idx].name),
             .value = variant,
@@ -114,11 +118,11 @@ pub const TapeTerm = struct {
 };
 
 pub const Tape = struct {
-    nodes: [128]TapeNode,
+    nodes: []TapeNode,
     count: usize,
-    pub fn new() Tape {
+    pub fn new(allocator: *Allocator, max_count: usize) !Tape {
         var tape = Tape{
-            .nodes = undefined,
+            .nodes = try allocator.alloc(TapeNode, max_count),
             .count = 2,
         };
 
