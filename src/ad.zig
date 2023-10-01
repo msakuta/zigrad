@@ -347,6 +347,24 @@ pub const Tape = struct {
             std.debug.print("node[{d}]: {?}\n", .{ i, node.value });
         }
     }
+    pub fn dot(self: *const Tape, writer: anytype) !void {
+        try writer.print("digraph D {{\n", .{});
+        for (self.*.nodes[0..self.*.count], 0..) |node, i| {
+            try writer.print("a{d} [label=\"{s}\", shape=rect];\n", .{ i, node.name });
+        }
+        for (self.*.nodes[0..self.*.count], 0..) |node, i| {
+            switch (node.value) {
+                .value => |_| {},
+                .add => |args| try writer.print("a{d} -> a{d};\na{d} -> a{d};\n", .{ args[0], i, args[1], i }),
+                .sub => |args| try writer.print("a{d} -> a{d};\na{d} -> a{d};\n", .{ args[0], i, args[1], i }),
+                .mul => |args| try writer.print("a{d} -> a{d};\na{d} -> a{d};\n", .{ args[0], i, args[1], i }),
+                .div => |args| try writer.print("a{d} -> a{d};\na{d} -> a{d};\n", .{ args[0], i, args[1], i }),
+                .neg => |arg| try writer.print("a{d} -> a{d};\n", .{ arg, i }),
+                .unary_fn => |args| try writer.print("a{d} -> a{d};\n", .{ args.idx, i }),
+            }
+        }
+        try writer.print("}}\n", .{});
+    }
 };
 
 pub const TapeIndex = u32;

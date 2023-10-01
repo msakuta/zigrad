@@ -173,7 +173,16 @@ fn gaussian_higher_order_demo() !void {
     const gaussian = try nx2.apply(&allocator, "exp", &exp, &exp, &gen_graph_exp);
     const derived = try gaussian.gen_graph(x, &allocator) orelse @panic("derived var doesn't exist");
     const derived2 = try derived.gen_graph(x, &allocator) orelse @panic("derived var doesn't exist");
-    tape.dump();
+
+    {
+        const dotfile = try std.fs.cwd().createFile(
+            "graphviz.dot",
+            .{ .read = true },
+        );
+        defer dotfile.close();
+        try tape.dot(dotfile.writer());
+    }
+
     for (0..100) |i| {
         const xval = (@as(f64, @floatFromInt(i)) - 50.0) / 10.0;
         tape.clear_data();
