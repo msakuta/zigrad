@@ -7,6 +7,7 @@ const expect = std.testing.expect;
 
 pub fn main() !void {
     std.debug.print("size: {?}\n", .{@sizeOf(ad.TapeNode)});
+    // try sine_demo();
     // try gen_graph_test();
     try gaussian_higher_order_demo();
 }
@@ -62,7 +63,7 @@ fn sine_demo() !void {
     var tape = Tape.new();
     const x = tape.variable("x", 0.0);
     const x2 = try x.mul(x, &allocator);
-    const sin_x = try x2.apply(&allocator, "sin", &sin, &cos);
+    const sin_x = try x2.apply(&allocator, "sin", &sin, &cos, null);
     for (0..100) |i| {
         const xval = (@as(f64, @floatFromInt(i)) - 50.0) / 10.0;
         tape.clear_data();

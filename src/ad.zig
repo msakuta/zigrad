@@ -75,7 +75,7 @@ pub const TapeTerm = struct {
             .idx = @intCast(term),
         };
     }
-    pub fn apply(self: *const TapeTerm, arena: *std.mem.Allocator, name: [:0]const u8, f: *const fn (f64) f64, grad: *const fn (f64) f64, gen_graph_: GenGraph) !TapeTerm {
+    pub fn apply(self: *const TapeTerm, arena: *std.mem.Allocator, name: [:0]const u8, f: *const fn (f64) f64, grad: *const fn (f64) f64, gen_graph_: ?GenGraph) !TapeTerm {
         var tape = self.*.tape;
         const term = tape.*.count;
         tape.*.nodes[term] = TapeNode{
@@ -325,9 +325,9 @@ pub const Tape = struct {
             },
             .unary_fn => |args| {
                 debug_print("gen_graph[{d}] .unary_fn {d} {d}\n", .{ self.*.count, args.idx, wrt });
-                if (try self.gen_graph(args.idx, wrt, allocator)) |input_derive| {
-                    return args.gen_graph(self, args.idx, input_derive.idx, term, allocator);
-                }
+                const f = args.gen_graph orelse return null;
+                const input_derive = try self.gen_graph(args.idx, wrt, allocator) orelse return null;
+                return f(self, args.idx, input_derive.idx, term, allocator);
             },
         }
         return null;
@@ -377,7 +377,7 @@ pub const TapeValue = union(enum) {
     mul: [2]TapeIndex,
     div: [2]TapeIndex,
     neg: TapeIndex,
-    unary_fn: struct { idx: TapeIndex, f: *const fn (f64) f64, grad: *const fn (f64) f64, gen_graph: GenGraph },
+    unary_fn: struct { idx: TapeIndex, f: *const fn (f64) f64, grad: *const fn (f64) f64, gen_graph: ?GenGraph },
 };
 
 test "tape_value" {
