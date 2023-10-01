@@ -1,6 +1,11 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const expect = std.testing.expect;
 
+// const debug_print = std.debug.print;
+fn debug_print(fmt: [:0]const u8, _: anytype) void {
+    _ = fmt;
+}
 
 pub const TapeNode = struct {
     name: [:0]const u8,
@@ -39,6 +44,10 @@ pub const TapeTerm = struct {
         self.*.tape.clear_grad();
         return self.*.tape.backward(self.*.idx);
     }
+    pub fn gen_graph(self: *const TapeTerm, wrt: TapeTerm, allocator: *Allocator) !?TapeTerm {
+        try expect(self.*.tape == wrt.tape);
+        return self.*.tape.gen_graph(self.*.idx, wrt.idx, allocator);
+    }
     pub fn add(self: *const TapeTerm, rhs: TapeTerm, arena: *std.mem.Allocator) !TapeTerm {
         return self._bin_op(rhs, arena, TapeValue{ .add = .{ self.*.idx, rhs.idx } }, " - ", true);
     }
@@ -66,12 +75,12 @@ pub const TapeTerm = struct {
             .idx = @intCast(term),
         };
     }
-    pub fn apply(self: *const TapeTerm, arena: *std.mem.Allocator, name: [:0]const u8, f: *const fn (f64) f64, grad: *const fn (f64) f64) !TapeTerm {
+    pub fn apply(self: *const TapeTerm, arena: *std.mem.Allocator, name: [:0]const u8, f: *const fn (f64) f64, grad: *const fn (f64) f64, gen_graph_: GenGraph) !TapeTerm {
         var tape = self.*.tape;
         const term = tape.*.count;
         tape.*.nodes[term] = TapeNode{
             .name = try std.mem.concatWithSentinel(arena.*, u8, &[_][:0]const u8{ name, "(", tape.*.nodes[self.*.idx].name, ")" }, 0),
-            .value = TapeValue{ .unary_fn = .{ .idx = self.*.idx, .f = f, .grad = grad } },
+            .value = TapeValue{ .unary_fn = .{ .idx = self.*.idx, .f = f, .grad = grad, .gen_graph = gen_graph_ } },
             .data = null,
             .grad = null,
         };
@@ -96,16 +105,37 @@ pub const TapeTerm = struct {
             .idx = @intCast(term),
         };
     }
+    pub fn from(tape: *Tape, idx: TapeIndex) TapeTerm {
+        return TapeTerm{
+            .tape = tape,
+            .idx = idx,
+        };
+    }
 };
 
 pub const Tape = struct {
     nodes: [128]TapeNode,
     count: usize,
     pub fn new() Tape {
-        return Tape{
+        var tape = Tape{
             .nodes = undefined,
-            .count = 0,
+            .count = 2,
         };
+
+        tape.nodes[0] = TapeNode{
+            .name = "0",
+            .value = TapeValue{ .value = 0 },
+            .data = null,
+            .grad = null,
+        };
+        tape.nodes[1] = TapeNode{
+            .name = "1",
+            .value = TapeValue{ .value = 1 },
+            .data = null,
+            .grad = null,
+        };
+
+        return tape;
     }
     pub fn variable(self: *Tape, name: [:0]const u8, v: f64) TapeTerm {
         const term = self.*.count;
@@ -210,6 +240,98 @@ pub const Tape = struct {
             }
         }
     }
+    pub fn gen_graph(self: *Tape, term: TapeIndex, wrt: TapeIndex, allocator: *std.mem.Allocator) !?TapeTerm {
+        var nodes = &self.*.nodes;
+        var node = &nodes.*[term];
+        switch (node.value) {
+            .value => |_| {
+                debug_print("gen_graph[{d}] .value {d} {d}\n", .{ self.*.count, term, wrt });
+                if (term == wrt) {
+                    return TapeTerm.from(self, 1);
+                }
+            },
+            .add => |args| {
+                debug_print("gen_graph .add ({d} {d}) {d}\n", .{ args[0], args[1], wrt });
+                const lhs = try self.gen_graph(args[0], wrt, allocator);
+                const rhs = try self.gen_graph(args[1], wrt, allocator);
+                if (lhs) |lhs2| {
+                    if (rhs) |rhs2| {
+                        debug_print("  .add both derived = ({?} {?})\n", .{ lhs2.idx, rhs2.idx });
+                        return try lhs2.add(rhs2, allocator);
+                    } else {
+                        return lhs2;
+                    }
+                } else {
+                    return null;
+                }
+            },
+            .sub => |args| {
+                debug_print("gen_graph .sub ({d} {d}) {d}\n", .{ args[0], args[1], wrt });
+                const lhs = try self.gen_graph(args[0], wrt, allocator);
+                const rhs = try self.gen_graph(args[1], wrt, allocator);
+                if (lhs) |lhs2| {
+                    if (rhs) |rhs2| {
+                        return try lhs2.sub(rhs2, allocator);
+                    } else {
+                        return lhs2;
+                    }
+                } else {
+                    return null;
+                }
+            },
+            .mul => |args| {
+                debug_print("gen_graph[{d}] .mul ({d} {d}) {d}\n", .{ self.*.count, args[0], args[1], wrt });
+                const lhs = TapeTerm.from(self, args[0]);
+                const dlhs_opt = try self.gen_graph(args[0], wrt, allocator);
+                const rhs = TapeTerm.from(self, args[1]);
+                const drhs_opt = try self.gen_graph(args[1], wrt, allocator);
+                if (dlhs_opt) |dlhs| {
+                    if (drhs_opt) |drhs| {
+                        debug_print("  .mul both derived = ({?} {?})\n", .{ dlhs.idx, drhs.idx });
+                        return try (try lhs.mul(drhs, allocator)).add(try dlhs.mul(rhs, allocator), allocator);
+                    } else {
+                        debug_print("  .mul lhs derived = {?}\n", .{dlhs.idx});
+                        return try dlhs.mul(rhs, allocator);
+                    }
+                } else if (drhs_opt) |drhs| {
+                    debug_print("  .mul rhs derived = {?}\n", .{drhs.idx});
+                    return try lhs.mul(drhs, allocator);
+                } else {
+                    debug_print("  .mul none derived\n", .{});
+                    return null;
+                }
+            },
+            .div => |args| {
+                debug_print("gen_graph .div ({d} {d}) {d}\n", .{ args[0], args[1], wrt });
+                const lhs = TapeTerm.from(self, args[0]);
+                const dlhs_opt = try self.gen_graph(args[0], wrt, allocator);
+                const rhs = TapeTerm.from(self, args[1]);
+                const drhs_opt = try self.gen_graph(args[1], wrt, allocator);
+                if (dlhs_opt) |dlhs| {
+                    if (drhs_opt) |drhs2| {
+                        return try (try (try (try (try lhs.mul(drhs2, allocator)).div(rhs, allocator)).div(rhs, allocator)).neg(allocator)).add(try dlhs.div(rhs, allocator), allocator);
+                    } else {
+                        return try dlhs.div(rhs, allocator);
+                    }
+                } else if (drhs_opt) |drhs2| {
+                    return try (try (try (try lhs.mul(drhs2, allocator)).div(rhs, allocator)).div(rhs, allocator)).neg(allocator);
+                } else {
+                    return null;
+                }
+            },
+            .neg => |arg| {
+                debug_print("gen_graph[{d}] .neg {d} {d}\n", .{ self.*.count, arg, wrt });
+                return try (try self.gen_graph(arg, wrt, allocator) orelse return null).neg(allocator);
+            },
+            .unary_fn => |args| {
+                debug_print("gen_graph[{d}] .unary_fn {d} {d}\n", .{ self.*.count, args.idx, wrt });
+                if (try self.gen_graph(args.idx, wrt, allocator)) |input_derive| {
+                    return args.gen_graph(self, args.idx, input_derive.idx, term, allocator);
+                }
+            },
+        }
+        return null;
+    }
     pub fn clear_data(self: *Tape) void {
         for (self.*.nodes[0..self.*.count]) |*node| {
             node.*.data = null;
@@ -220,9 +342,15 @@ pub const Tape = struct {
             node.*.grad = null;
         }
     }
+    pub fn dump(self: *const Tape) void {
+        for (self.*.nodes[0..self.*.count], 0..) |*node, i| {
+            std.debug.print("node[{d}]: {?}\n", .{ i, node.value });
+        }
+    }
 };
 
-const TapeIndex = u32;
+pub const TapeIndex = u32;
+pub const GenGraph = *const fn (*Tape, TapeIndex, TapeIndex, TapeIndex, *Allocator) ?TapeTerm;
 
 pub const TapeValue = union(enum) {
     value: f64,
@@ -231,7 +359,7 @@ pub const TapeValue = union(enum) {
     mul: [2]TapeIndex,
     div: [2]TapeIndex,
     neg: TapeIndex,
-    unary_fn: struct { idx: TapeIndex, f: *const fn (f64) f64, grad: *const fn (f64) f64 },
+    unary_fn: struct { idx: TapeIndex, f: *const fn (f64) f64, grad: *const fn (f64) f64, gen_graph: GenGraph },
 };
 
 test "tape_value" {
