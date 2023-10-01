@@ -7,15 +7,14 @@ const expect = std.testing.expect;
 
 pub fn main() !void {
     // try expr_demo();
-    // try sine_demo();
+    try sine_demo();
     // try gen_graph_test();
-    try gaussian_higher_order_demo();
+    // try gaussian_demo();
+    // try gaussian_higher_order_demo();
 }
 
 fn expr_demo() !void {
-    var da = std.heap.page_allocator;
-
-    var aa = std.heap.ArenaAllocator.init(da);
+    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer aa.deinit();
     var allocator = aa.allocator();
 
@@ -54,7 +53,7 @@ fn sine_demo() !void {
     defer file.close();
 
     const writer = file.writer();
-    try writer.print("x, sin, dsin/dx\n", .{});
+    try writer.print("x, sin(x^2), d(sin(x^2))/dx,\n", .{});
 
     var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer aa.deinit();
@@ -92,7 +91,7 @@ fn gaussian_demo() !void {
     defer aa.deinit();
     var allocator = aa.allocator();
 
-    var tape = Tape.new();
+    var tape = try Tape.new();
     const x = tape.variable("x", 0.0);
     const x2 = try x.mul(x, &allocator);
     const nx2 = try x2.neg(&allocator);
